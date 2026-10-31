@@ -17,14 +17,15 @@ function createMockedCache() {
   cache.cache.set('runtime-hole', RUNTIME_DATA)
   cache.cache.set('session-hole', SESSION_DATA)
 
-  // Should be included during serialization.
+  // Should be included during serialization: its stale time is at the
+  // prefetchable minimum, so it is part of prerenders.
   cache.cache.set(
     'success',
     Promise.resolve({
       entry: {
         value: streamFromString('value'),
         tags: [],
-        stale: 0,
+        stale: 30,
         timestamp: 0,
         expire: 300,
         revalidate: 1,
@@ -66,6 +67,27 @@ function createMockedCache() {
         timestamp: 0,
         expire: 300,
         revalidate: 0,
+      },
+      hasExplicitRevalidate: true,
+      hasExplicitExpire: true,
+      readRootParamNames: undefined,
+      dynamicNestedCacheError: undefined,
+    })
+  )
+
+  // Should be omitted during serialization (cache components only): a stale
+  // time below the prefetchable minimum means the entry was excluded from
+  // prerenders entirely, so it must not be served from a postponed RDC.
+  cache.cache.set(
+    'unprefetchable-stale',
+    Promise.resolve({
+      entry: {
+        value: streamFromString('value'),
+        tags: [],
+        stale: 0,
+        timestamp: 0,
+        expire: 300,
+        revalidate: 1,
       },
       hasExplicitRevalidate: true,
       hasExplicitExpire: true,
@@ -166,11 +188,11 @@ describe('stringifyResumeDataCache', () => {
 
     if (isCacheComponentsEnabled) {
       expect(serialized).toMatchInlineSnapshot(
-        `"{"store":{"fetch":{},"cache":{"success":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":1}},"encryptedBoundArgs":{}}}"`
+        `"{"store":{"fetch":{},"cache":{"success":{"value":"dmFsdWU=","tags":[],"stale":30,"timestamp":0,"expire":300,"revalidate":1}},"encryptedBoundArgs":{}}}"`
       )
     } else {
       expect(serialized).toMatchInlineSnapshot(
-        `"{"store":{"fetch":{},"cache":{"success":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"dynamic-expire":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":299,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"zero-revalidate":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":0},"hasExplicitRevalidate":true,"hasExplicitExpire":true}},"encryptedBoundArgs":{}}}"`
+        `"{"store":{"fetch":{},"cache":{"success":{"entry":{"value":"dmFsdWU=","tags":[],"stale":30,"timestamp":0,"expire":300,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"dynamic-expire":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":299,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"zero-revalidate":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":0},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"unprefetchable-stale":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true}},"encryptedBoundArgs":{}}}"`
       )
     }
   })
@@ -187,11 +209,11 @@ describe('stringifyResumeDataCache', () => {
     // but the failed entry will be ignored and omitted from the output.
     if (isCacheComponentsEnabled) {
       expect(serialized).toMatchInlineSnapshot(
-        `"{"store":{"fetch":{},"cache":{"success":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":1}},"encryptedBoundArgs":{}}}"`
+        `"{"store":{"fetch":{},"cache":{"success":{"value":"dmFsdWU=","tags":[],"stale":30,"timestamp":0,"expire":300,"revalidate":1}},"encryptedBoundArgs":{}}}"`
       )
     } else {
       expect(serialized).toMatchInlineSnapshot(
-        `"{"store":{"fetch":{},"cache":{"success":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"dynamic-expire":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":299,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"zero-revalidate":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":0},"hasExplicitRevalidate":true,"hasExplicitExpire":true}},"encryptedBoundArgs":{}}}"`
+        `"{"store":{"fetch":{},"cache":{"success":{"entry":{"value":"dmFsdWU=","tags":[],"stale":30,"timestamp":0,"expire":300,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"dynamic-expire":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":299,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"zero-revalidate":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":0},"hasExplicitRevalidate":true,"hasExplicitExpire":true},"unprefetchable-stale":{"entry":{"value":"dmFsdWU=","tags":[],"stale":0,"timestamp":0,"expire":300,"revalidate":1},"hasExplicitRevalidate":true,"hasExplicitExpire":true}},"encryptedBoundArgs":{}}}"`
       )
     }
   })
@@ -243,8 +265,13 @@ describe('parseResumeDataCache', () => {
         disableResumeDataCacheCompression
       )
 
-      expect(parsed.cache.size).toBe(isCacheComponentsEnabled ? 1 : 3)
+      expect(parsed.cache.size).toBe(isCacheComponentsEnabled ? 1 : 4)
       expect(parsed.fetch.size).toBe(0)
+      // The unprefetchable entry survives only when cache components are off;
+      // in cache-components mode it is excluded from the serialized RDC.
+      expect(parsed.cache.has('unprefetchable-stale')).toBe(
+        !isCacheComponentsEnabled
+      )
       expect(parsed.cache.has('fallback-hole')).toBe(false)
       expect(parsed.cache.has('runtime-hole')).toBe(false)
       expect(parsed.cache.has('session-hole')).toBe(false)

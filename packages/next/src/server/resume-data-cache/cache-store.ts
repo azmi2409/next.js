@@ -3,7 +3,10 @@ import {
   stringToUint8Array,
 } from '../app-render/encryption-utils'
 import type { CachedFetchValue } from '../response-cache/types'
-import { MIN_PRERENDERABLE_EXPIRE } from '../use-cache/constants'
+import {
+  MIN_PREFETCHABLE_STALE,
+  MIN_PRERENDERABLE_EXPIRE,
+} from '../use-cache/constants'
 import type { CollectedCacheResult } from '../use-cache/use-cache-wrapper'
 
 /**
@@ -160,10 +163,18 @@ export async function serializeUseCacheCacheStore(
             if (
               isCacheComponentsEnabled &&
               (entry.revalidate === 0 ||
-                entry.expire < MIN_PRERENDERABLE_EXPIRE)
+                entry.expire < MIN_PRERENDERABLE_EXPIRE ||
+                entry.stale < MIN_PREFETCHABLE_STALE)
             ) {
               // The entry was omitted from the prerender result, and subsequently
-              // does not need to be included in the serialized RDC.
+              // does not need to be included in the serialized RDC. This covers
+              // entries excluded from prerenders entirely because their stale
+              // time is below `MIN_PREFETCHABLE_STALE`: serializing one would
+              // serve its build-time value from the postponed RDC on every
+              // request, while the route carries no revalidate, expire, or tags
+              // for it (that metadata is only propagated for entries that were
+              // not omitted), so it could never be refreshed by revalidation,
+              // expiry, or `revalidateTag`.
               return null
             }
 
