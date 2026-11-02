@@ -815,6 +815,23 @@ export default class NextNodeServer extends BaseServer<
 
     for (const pagePath of pagePaths) {
       try {
+        // When i18n is configured, the locale-prefixed candidate (e.g.
+        // `/en/about`) usually does not exist in the pages manifest, so
+        // `loadComponents` would throw a `PageNotFoundError` that this loop
+        // catches and discards. Since `loadComponents` traces the
+        // `load route module` span, that discarded error was recorded as an
+        // ERROR span on every successful request. Check for the candidate
+        // without throwing first and skip it when it does not exist.
+        // `requirePage` resolves with the same arguments (`locales` is
+        // `undefined`), so the outcome is unchanged. A page that only exists
+        // under a locale prefix is still found.
+        if (
+          pagePath !== page &&
+          !getMaybePagePath(pagePath, this.distDir, undefined, isAppPath)
+        ) {
+          continue
+        }
+
         const components = await loadComponents({
           distDir: this.distDir,
           page: pagePath,
